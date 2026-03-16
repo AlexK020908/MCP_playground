@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "user-calculator": {
+      "command": "E:\\business\\MCP_PLAYGROUND\\devenv\\Scripts\\python.exe",
+      "args": ["E:\\business\\MCP_PLAYGROUND\\calculator_server.py"]
+    },
+    "email": {
+      "command": "E:\\business\\MCP_PLAYGROUND\\devenv\\Scripts\\python.exe",
+      "args": ["E:\\business\\MCP_PLAYGROUND\\custom_mcp_server.py"]
+    }
+  }
+}

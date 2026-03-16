@@ -1,0 +1,8 @@
+# Credentials and tokens (do not commit)
+gmail_credentials.json
+gmail_token.json
+outlook_token_cache.bin
+.env
+
+# Venv
+devenv/
