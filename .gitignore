@@ -2,7 +2,12 @@
 gmail_credentials.json
 gmail_token.json
 outlook_token_cache.bin
+outlook_token_cache_2.bin
 .env
 
 # Venv
 devenv/
+
+# Script output (may contain sensitive email metadata)
+tax_emails_curated.xlsx
+search_emails.xlsx

@@ -1,14 +1,12 @@
 """
-Email MCP server: search Gmail or Outlook via one tool.
-Gmail: Google Cloud project, Gmail API, gmail_credentials.json → gmail_token.json.
-Outlook: Azure app registration (public client), OUTLOOK_CLIENT_ID → outlook_token_cache.bin.
+Email MCP server: search Gmail or Outlook and export results to Excel (with links).
+Gmail: gmail_credentials.json → gmail_token.json.
+Outlook: OUTLOOK_CLIENT_ID → outlook_token_cache.bin. Optional second account: OUTLOOK_TOKEN_CACHE_2.
 """
 from __future__ import annotations
 
-import html
 import json
 import os
-import re
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -18,33 +16,6 @@ from fastmcp import FastMCP
 
 _BASE = Path(__file__).resolve().parent
 load_dotenv(_BASE / ".env")
-
-
-def _html_to_plain(html_content: str) -> str:
-    """Strip tags and decode entities for readable plain text."""
-    if not html_content:
-        return ""
-    text = re.sub(r"<br\s*/?>", "\n", html_content, flags=re.IGNORECASE)
-    text = re.sub(r"</(p|div|tr|li|h[1-6])>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = html.unescape(text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def _fmt(from_: str, subject: str, date: str, snippet: str) -> str:
-    return f"From: {from_}\nSubject: {subject}\nDate: {date}\n{snippet}\n"
-
-
-def _fmt_email_pretty(from_: str, subject: str, date: str, body: str) -> str:
-    """Format one email as markdown for pretty display."""
-    body_plain = _html_to_plain(body) if body else ""
-    return (
-        f"### {subject}\n\n"
-        f"**From:** {from_}  \n"
-        f"**Date:** {date}\n\n"
-        f"{body_plain}\n"
-    )
 
 
 # ---- Gmail ----
@@ -74,110 +45,24 @@ def _gmail_service():
     return build("gmail", "v1", credentials=creds)
 
 
-def _gmail_get_body(payload: dict) -> str:
-    """Extract plain text body from Gmail message payload."""
-    import base64
-    body = (payload.get("body") or {}).get("data")
-    if body:
-        try:
-            return base64.urlsafe_b64decode(body).decode("utf-8", errors="replace")
-        except Exception:
-            pass
-    for part in payload.get("parts") or []:
-        if part.get("mimeType") == "text/plain":
-            b = (part.get("body") or {}).get("data")
-            if b:
-                try:
-                    return base64.urlsafe_b64decode(b).decode("utf-8", errors="replace")
-                except Exception:
-                    pass
-    for part in payload.get("parts") or []:
-        if part.get("mimeType") == "text/html":
-            b = (part.get("body") or {}).get("data")
-            if b:
-                try:
-                    return _html_to_plain(
-                        base64.urlsafe_b64decode(b).decode("utf-8", errors="replace")
-                    )
-                except Exception:
-                    pass
-    return ""
-
-
-def _search_gmail(
-    query: str,
-    max_results: int,
-    after_date: str | None = None,
-    include_body: bool = False,
-) -> list[str]:
-    service = _gmail_service()
-    q = query
-    if after_date:
-        q = f"{query} after:{after_date.replace('-', '/')}"
-    limit = min(max_results, 25 if include_body else 100)
-    results = (
-        service.users()
-        .messages()
-        .list(userId="me", q=q, maxResults=limit)
-        .execute()
-    )
-    messages = results.get("messages", [])
-    out = []
-    for m in messages:
-        msg = (
-            service.users()
-            .messages()
-            .get(
-                userId="me",
-                id=m["id"],
-                format="full" if include_body else "metadata",
-                metadataHeaders=["From", "Subject", "Date"] if not include_body else None,
-            )
-            .execute()
-        )
-        payload = msg.get("payload", {}) or {}
-        headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
-        if include_body:
-            body = _gmail_get_body(payload)
-            out.append(
-                _fmt_email_pretty(
-                    headers.get("from", ""),
-                    headers.get("subject", ""),
-                    headers.get("date", ""),
-                    body,
-                )
-            )
-        else:
-            out.append(
-                _fmt(
-                    headers.get("from", ""),
-                    headers.get("subject", ""),
-                    headers.get("date", ""),
-                    (msg.get("snippet") or "").replace("\n", " ")[:200],
-                )
-            )
-    return out
-
-
 # ---- Outlook (Microsoft Graph) ----
-def _outlook_token():
+def _outlook_token_for_cache(cache_path: str):
+    """Get (access_token, account_email) for one Outlook token cache. Raises if no token."""
     import msal
 
     client_id = os.environ.get("OUTLOOK_CLIENT_ID")
     if not client_id:
         raise FileNotFoundError("Set OUTLOOK_CLIENT_ID (Azure app registration, public client).")
     tenant = os.environ.get("OUTLOOK_TENANT_ID", "common")
-    cache_path = os.environ.get("OUTLOOK_TOKEN_CACHE", str(_BASE / "outlook_token_cache.bin"))
     scopes = ["https://graph.microsoft.com/Mail.Read"]
-
-    # Redirect port: must match a redirect URI in Azure (e.g. http://localhost:8400).
-    # Azure Portal → App registration → Authentication → Mobile and desktop applications → Add http://localhost:PORT
     redirect_port = int(os.environ.get("OUTLOOK_REDIRECT_PORT", "8400"))
 
     cache = msal.SerializableTokenCache()
     if os.path.exists(cache_path):
         cache.deserialize(open(cache_path, "r").read())
-    app = msal.PublicClientApplication(client_id, authority=f"https://login.microsoftonline.com/{tenant}", token_cache=cache)
+    app = msal.PublicClientApplication(
+        client_id, authority=f"https://login.microsoftonline.com/{tenant}", token_cache=cache
+    )
     accounts = app.get_accounts()
     if accounts:
         result = app.acquire_token_silent(scopes, account=accounts[0])
@@ -186,36 +71,101 @@ def _outlook_token():
     if not result:
         raise RuntimeError("Failed to get Outlook token.")
     open(cache_path, "w").write(cache.serialize())
-    return result["access_token"]
+    email = (accounts[0].get("username") or "") if accounts else ""
+    return result["access_token"], email
 
 
-def _outlook_get_message_body(token: str, message_id: str) -> str:
-    """Fetch a single message's body (Graph often 500s when body is requested with $search)."""
-    url = (
-        "https://graph.microsoft.com/v1.0/me/messages/"
-        + urllib.parse.quote(message_id, safe="")
-        + "?$select=body"
-    )
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req) as resp:
-        data = json.load(resp)
-    body_obj = data.get("body") or {}
-    return (body_obj.get("content") or "") if isinstance(body_obj, dict) else ""
+def _outlook_token():
+    """Single-account: returns access_token only (backward compatible)."""
+    cache_path = os.environ.get("OUTLOOK_TOKEN_CACHE", str(_BASE / "outlook_token_cache.bin"))
+    token, _ = _outlook_token_for_cache(cache_path)
+    return token
 
 
-def _search_outlook(
+def _outlook_all_tokens() -> list[tuple[str, str]]:
+    """Returns list of (account_email, access_token) for all configured Outlook caches (main + optional second)."""
+    cache1 = os.environ.get("OUTLOOK_TOKEN_CACHE", str(_BASE / "outlook_token_cache.bin"))
+    cache2 = os.environ.get("OUTLOOK_TOKEN_CACHE_2")
+    paths = [cache1]
+    if cache2:
+        paths.append(cache2)
+    result: list[tuple[str, str]] = []
+    last_error: Exception | None = None
+    for cache_path in paths:
+        try:
+            token, email = _outlook_token_for_cache(cache_path)
+            result.append((email or cache_path, token))
+        except Exception as e:
+            last_error = e
+            if len(paths) == 1:
+                raise
+            continue
+    return result
+
+
+def _search_gmail_rows(
     query: str,
     max_results: int,
     after_date: str | None = None,
-    include_body: bool = False,
-) -> list[str]:
-    token = _outlook_token()
-    # Graph does not support $search and $filter together; we filter by date client-side
-    top = min(max_results * 2 if after_date else max_results, 100)  # fetch extra if filtering
+) -> list[dict]:
+    """Same params as _search_gmail; returns list of dicts with provider, from, subject, date, snippet, link, query_used."""
+    service = _gmail_service()
+    q = query
+    if after_date:
+        q = f"{query} after:{after_date.replace('-', '/')}"
+    limit = min(max_results, 100)
+    results = (
+        service.users()
+        .messages()
+        .list(userId="me", q=q, maxResults=limit)
+        .execute()
+    )
+    rows: list[dict] = []
+    for m in results.get("messages", []):
+        mid = m["id"]
+        try:
+            msg = (
+                service.users()
+                .messages()
+                .get(
+                    userId="me",
+                    id=mid,
+                    format="metadata",
+                    metadataHeaders=["From", "Subject", "Date"],
+                )
+                .execute()
+            )
+        except Exception:
+            continue
+        payload = msg.get("payload", {}) or {}
+        headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
+        snippet = (msg.get("snippet") or "").replace("\n", " ").strip()[:300]
+        rows.append({
+            "provider": "Gmail",
+            "account": "",
+            "from": headers.get("from", ""),
+            "subject": headers.get("subject", ""),
+            "date": headers.get("date", ""),
+            "snippet": snippet,
+            "link": f"https://mail.google.com/mail/u/0/#inbox/{mid}",
+            "query_used": query,
+        })
+    return rows
+
+
+def _search_outlook_rows_with_token(
+    token: str,
+    account_email: str,
+    query: str,
+    max_results: int,
+    after_date: str | None = None,
+) -> list[dict]:
+    """Search one Outlook account (given token); returns rows with provider, account, from, subject, etc."""
+    top = min(max_results * 2 if after_date else max_results, 100)
     params = [
         ("$search", f'"{query}"'),
         ("$top", str(top)),
-        ("$select", "id,from,subject,receivedDateTime,bodyPreview"),
+        ("$select", "id,from,subject,receivedDateTime,bodyPreview,webLink"),
     ]
     url = "https://graph.microsoft.com/v1.0/me/messages?" + urllib.parse.urlencode(
         params, safe="$,()", quote_via=urllib.parse.quote
@@ -224,31 +174,99 @@ def _search_outlook(
     with urllib.request.urlopen(req) as resp:
         data = json.load(resp)
     cutoff = f"{after_date}T00:00:00Z" if after_date else None
-    out = []
+    rows: list[dict] = []
     for m in data.get("value", []):
+        if len(rows) >= max_results:
+            break
         received = m.get("receivedDateTime") or ""
         if cutoff and received < cutoff:
             continue
-        if len(out) >= max_results:
-            break
         from_obj = m.get("from", {}) or {}
         from_addr = from_obj.get("emailAddress", {}) or {}
         from_str = from_addr.get("address", "") or (from_addr.get("name", "") or "")
-        if include_body:
-            body = _outlook_get_message_body(token, m["id"])
-            out.append(
-                _fmt_email_pretty(from_str, m.get("subject", ""), received, body)
-            )
-        else:
-            out.append(
-                _fmt(
-                    from_str,
-                    m.get("subject", ""),
-                    received,
-                    (m.get("bodyPreview") or "").replace("\n", " ")[:200],
-                )
-            )
-    return out
+        mid = m.get("id", "")
+        snippet = (m.get("bodyPreview") or "").replace("\n", " ").strip()[:300]
+        link = m.get("webLink") or f"https://outlook.live.com/mail/0/inbox/id/{mid}"
+        rows.append({
+            "provider": "Outlook",
+            "account": account_email,
+            "from": from_str,
+            "subject": m.get("subject", ""),
+            "date": received,
+            "snippet": snippet,
+            "link": link,
+            "query_used": query,
+        })
+    return rows
+
+
+def _search_outlook_rows(
+    query: str,
+    max_results: int,
+    after_date: str | None = None,
+) -> list[dict]:
+    """Search all configured Outlook accounts; returns merged rows with account column."""
+    tokens = _outlook_all_tokens()
+    if not tokens:
+        raise RuntimeError(
+            "Outlook: no valid token. One or both caches may have expired. "
+            "Run the MCP again and complete browser sign-in when prompted, or run "
+            "python custom_mcp_server.py and trigger an Outlook search to re-auth."
+        )
+    rows: list[dict] = []
+    for account_email, token in tokens:
+        rows.extend(
+            _search_outlook_rows_with_token(token, account_email, query, max_results, after_date)
+        )
+    return rows
+
+
+def _filter_tax_filing_only(rows: list[dict]) -> list[dict]:
+    """Keep only rows that look like property tax, tax filing, or official government tax; drop payment/receipt tax."""
+    filing_keywords = (
+        "property tax", "tax return", "irs", "1040", "w-2", "w2", "file taxes", "tax filing",
+        "tax assessment", "department of revenue", "tax form", "tax authority", "income tax",
+        "form 1040", "extension", "tax deadline", "filing deadline", "federal tax", "state tax",
+        "tax refund", "1099", "tax year", "property tax assessment", "assessor", "tax bill",
+    )
+    kept: list[dict] = []
+    for r in rows:
+        text = (r.get("subject", "") + " " + r.get("snippet", "") + " " + r.get("from", "")).lower()
+        if any(f in text for f in filing_keywords):
+            kept.append(r)
+    return kept
+
+
+def _write_emails_excel(rows: list[dict], path: Path) -> None:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Emails"
+    headers = ["Provider", "Account", "From", "Subject", "Date", "Snippet", "Open link", "Search query used"]
+    for col, h in enumerate(headers, 1):
+        ws.cell(row=1, column=col, value=h)
+    for col in range(1, len(headers) + 1):
+        ws.cell(row=1, column=col).font = Font(bold=True)
+    for i, r in enumerate(rows, 2):
+        ws.cell(row=i, column=1, value=r.get("provider", ""))
+        ws.cell(row=i, column=2, value=r.get("account", ""))
+        ws.cell(row=i, column=3, value=r.get("from", ""))
+        ws.cell(row=i, column=4, value=r.get("subject", ""))
+        ws.cell(row=i, column=5, value=r.get("date", ""))
+        ws.cell(row=i, column=6, value=r.get("snippet", ""))
+        link = r.get("link", "")
+        cell = ws.cell(row=i, column=7, value="Open in mail" if link else "")
+        if link:
+            cell.hyperlink = link
+            cell.font = Font(color="0563C1", underline="single")
+        ws.cell(row=i, column=8, value=r.get("query_used", ""))
+    for col in range(1, 9):
+        ws.column_dimensions[get_column_letter(col)].width = max(12, min(50, 18 if col == 6 else 25))
+    ws.column_dimensions["F"].width = 50
+    wb.save(path)
 
 
 # ---- MCP ----
@@ -256,34 +274,57 @@ mcp = FastMCP("Email (Gmail + Outlook)")
 
 
 @mcp.tool()
-def search_emails(
+def search_emails_to_excel(
     provider: str,
     query: str,
     max_results: int = 50,
     after_date: str | None = None,
-    include_body: bool = False,
+    output_path: str | None = None,
+    tax_filing_only: bool = False,
 ) -> str:
     """
-    Search email. provider: 'gmail' or 'outlook'. query: search string (e.g. 'tax', 'columbia university').
-    after_date: optional YYYY-MM-DD to only include messages on or after this date (e.g. acceptance date).
-    include_body: if True, fetch full message body and return pretty-formatted output (max 25 messages).
-    Returns From, Subject, Date, and snippet or full body per message.
+    Search Gmail and/or Outlook and write an Excel file with: Provider, Account, From, Subject, Date, Snippet, Open link, Search query used.
+    provider: 'gmail', 'outlook', or 'both'. query: search string (e.g. 'tax return OR property tax OR IRS').
+    tax_filing_only: if True, keep only emails about property tax, tax filing, or official government tax; drop payment/receipt tax.
+    output_path: optional path for the .xlsx file; default is search_emails.xlsx in the server directory.
+    Returns the absolute path to the saved file and the number of emails included, or an error message.
     """
+    path = Path(output_path).resolve() if output_path else _BASE / "search_emails.xlsx"
+    if path.suffix.lower() != ".xlsx":
+        path = path.with_suffix(".xlsx")
+    all_rows: list[dict] = []
+    errors: list[str] = []
+    p = provider.lower()
+    if p in ("gmail", "both"):
+        try:
+            all_rows.extend(_search_gmail_rows(query, max_results, after_date))
+        except FileNotFoundError as e:
+            errors.append(f"Gmail: {e}")
+        except Exception as e:
+            errors.append(f"Gmail: {e}")
+    if p in ("outlook", "both"):
+        try:
+            all_rows.extend(_search_outlook_rows(query, max_results, after_date))
+        except FileNotFoundError as e:
+            errors.append(f"Outlook: {e}")
+        except Exception as e:
+            errors.append(f"Outlook: {e}")
+    if p not in ("gmail", "outlook", "both"):
+        return f"Unknown provider: {provider}. Use 'gmail', 'outlook', or 'both'."
+    before_count = 0
+    if tax_filing_only and all_rows:
+        before_count = len(all_rows)
+        all_rows = _filter_tax_filing_only(all_rows)
+    if not all_rows:
+        return "No messages found for that query. " + (" ".join(errors) if errors else "")
     try:
-        if provider.lower() == "gmail":
-            lines = _search_gmail(query, max_results, after_date, include_body)
-        elif provider.lower() == "outlook":
-            lines = _search_outlook(query, max_results, after_date, include_body)
-        else:
-            return f"Unknown provider: {provider}. Use 'gmail' or 'outlook'."
-    except FileNotFoundError as e:
-        return f"Config error: {e}"
+        _write_emails_excel(all_rows, path)
+        msg = f"Saved {len(all_rows)} emails to {path}"
+        if tax_filing_only and before_count and before_count != len(all_rows):
+            msg += f" (filtered from {before_count} to filing/official tax only)"
+        return msg
     except Exception as e:
-        return f"Error: {e}"
-    if not lines:
-        return "No messages found for that query."
-    separator = "\n\n---\n\n" if include_body else "\n---\n"
-    return separator.join(lines)
+        return f"Error writing Excel: {e}"
 
 
 if __name__ == "__main__":
