@@ -16,6 +16,8 @@ from fastmcp import FastMCP
 
 _BASE = Path(__file__).resolve().parent
 load_dotenv(_BASE / ".env")
+# Use E:/ so Windows resolves to the drive root (Path("E:") alone can be wrong)
+_E_FOLDER = Path("E:/")
 
 
 # ---- Gmail ----
@@ -325,6 +327,82 @@ def search_emails_to_excel(
         return msg
     except Exception as e:
         return f"Error writing Excel: {e}"
+
+
+def _read_folder_contents(folder: Path, max_chars: int = 200_000) -> str:
+    """Read text/md and PDF from folder; return concatenated content."""
+    lines = [f"Folder: {folder}", ""]
+    text_ext = {".txt", ".md", ".markdown"}
+    try:
+        import pypdf
+    except ImportError:
+        try:
+            import PyPDF2 as pypdf
+        except ImportError:
+            pypdf = None
+    for f in sorted(folder.rglob("*")):
+        if not f.is_file():
+            continue
+        ext = f.suffix.lower()
+        if ext in text_ext:
+            try:
+                content = f.read_text(encoding="utf-8", errors="replace")
+                lines.append(f"--- {f.name} ---")
+                lines.append(content[:30_000])
+                lines.append("")
+            except Exception as e:
+                lines.append(f"--- {f.name} (error: {e}) ---")
+                lines.append("")
+        elif ext == ".pdf" and pypdf:
+            try:
+                reader = pypdf.PdfReader(str(f))
+                parts = []
+                for page in reader.pages[:500]:
+                    parts.append(page.extract_text() or "")
+                content = "\n".join(parts)[:30_000]
+                lines.append(f"--- {f.name} (PDF) ---")
+                lines.append(content)
+                lines.append("")
+            except Exception as e:
+                lines.append(f"--- {f.name} (PDF error: {e}) ---")
+                lines.append("")
+        elif ext == ".pdf":
+            lines.append(f"--- {f.name} --- (install pypdf to extract text)")
+            lines.append("")
+    result = "\n".join(lines)
+    if len(result) > max_chars:
+        result = result[:max_chars] + "\n\n... (truncated)"
+    return result
+
+
+@mcp.tool()
+def get_quiz_materials(school_name: str, course_name: str, quiz_id: str) -> str:
+    """
+    Get all quiz materials for a course: lists and reads text/md files from the quiz folder.
+    school_name: e.g. 'ubc'. course_name: e.g. 'cpsc440'. quiz_id: e.g. '5' or 'quiz5'.
+    Looks in E:\\academics\\{school}\\{course}\\quiz\\{quiz_id} or E:\\academics\\{school}\\{course}\\quiz{quiz_id}.
+    Returns concatenated file contents for study.
+    """
+    base = _E_FOLDER / "academics" / school_name.lower().replace(" ", "") / course_name.lower().replace(" ", "") / "lectures"
+    if not base.exists():
+        return f"No course directory found: {base}"
+
+    candidates = [
+        base / f"quiz {quiz_id}",
+        base / "quiz" / quiz_id,
+        base / "quiz" / f"quiz{quiz_id}",
+        base / f"quiz{quiz_id}",
+        base / f"quiz_{quiz_id}",
+        base / "lectures",
+    ]
+    folder = None
+    for c in candidates:
+        if c.exists() and c.is_dir():
+            folder = c
+            break
+    if folder is None:
+        return f"No quiz folder found. Tried: {[str(c) for c in candidates]}. Listing base: {[p.name for p in base.iterdir()]}"
+    return _read_folder_contents(folder)
 
 
 if __name__ == "__main__":
