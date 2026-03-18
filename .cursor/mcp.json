@@ -1,16 +1,16 @@
 {
   "mcpServers": {
-    "user-calculator": {
-      "command": "E:\\business\\MCP_PLAYGROUND\\devenv\\Scripts\\python.exe",
-      "args": ["E:\\business\\MCP_PLAYGROUND\\calculator_server.py"]
-    },
     "email": {
       "command": "E:\\business\\MCP_PLAYGROUND\\devenv\\Scripts\\python.exe",
-      "args": ["E:\\business\\MCP_PLAYGROUND\\email_server.py"]
+      "args": [
+        "E:\\business\\MCP_PLAYGROUND\\email_server.py"
+      ]
     },
     "academics": {
       "command": "E:\\business\\MCP_PLAYGROUND\\devenv\\Scripts\\python.exe",
-      "args": ["E:\\business\\MCP_PLAYGROUND\\academics_server.py"]
+      "args": [
+        "E:\\business\\MCP_PLAYGROUND\\academics_server.py"
+      ]
     }
   }
 }
