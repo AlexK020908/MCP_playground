@@ -8,7 +8,7 @@ import os
 import urllib.parse
 import urllib.request
 
-from mcp_email.config import get_outlook_cache_2_path, get_outlook_cache_path
+from mcp_email.config import get_all_outlook_cache_paths
 
 
 def outlook_token_for_cache(cache_path: str) -> tuple[str, str]:
@@ -41,24 +41,33 @@ def outlook_token_for_cache(cache_path: str) -> tuple[str, str]:
 
 
 def outlook_all_tokens() -> list[tuple[str, str]]:
-    """Returns list of (account_email, access_token) for all configured Outlook caches (main + optional second)."""
-    cache1 = get_outlook_cache_path()
-    cache2 = get_outlook_cache_2_path()
-    paths = [cache1]
-    if cache2:
-        paths.append(cache2)
+    """Returns list of (account_email, access_token) for all configured Outlook caches. Deduplicated by email so the same account is not searched twice."""
+    paths = get_all_outlook_cache_paths()
     result: list[tuple[str, str]] = []
+    seen_emails: set[str] = set()
     last_error: Exception | None = None
     for cache_path in paths:
         try:
             token, email = outlook_token_for_cache(cache_path)
-            result.append((email or cache_path, token))
+            key = (email or cache_path).strip().lower()
+            if key and key not in seen_emails:
+                seen_emails.add(key)
+                result.append((email or cache_path, token))
         except Exception as e:
             last_error = e
             if len(paths) == 1:
                 raise
             continue
     return result
+
+
+def get_outlook_account_emails() -> list[str]:
+    """Return list of Outlook account emails that will be searched (one per token cache). May trigger re-auth if tokens expired."""
+    try:
+        tokens = outlook_all_tokens()
+        return [email for email, _ in tokens]
+    except Exception:
+        return []
 
 
 def search_outlook_rows_with_token(

@@ -36,3 +36,13 @@ def get_outlook_cache_path() -> str:
 
 def get_outlook_cache_2_path() -> str | None:
     return os.environ.get("OUTLOOK_TOKEN_CACHE_2")
+
+
+def get_all_outlook_cache_paths() -> list[str]:
+    """All Outlook token cache paths: main, then OUTLOOK_TOKEN_CACHE_2, _3, _4, ... _20 (any that are set)."""
+    paths: list[str] = [get_outlook_cache_path()]
+    for i in range(2, 21):
+        p = os.environ.get(f"OUTLOOK_TOKEN_CACHE_{i}")
+        if p and p.strip():
+            paths.append(p.strip())
+    return paths

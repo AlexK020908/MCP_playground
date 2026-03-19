@@ -18,6 +18,8 @@ from mcp_email import (
     write_emails_excel,
 )
 from mcp_email.config import set_base_path
+from mcp_email.gmail_client import get_gmail_account_email
+from mcp_email.outlook_client import get_outlook_account_emails
 
 _BASE = Path(__file__).resolve().parent
 load_dotenv(_BASE / ".env")
@@ -78,6 +80,32 @@ def search_emails_to_excel(
         return msg
     except Exception as e:
         return f"Error writing Excel: {e}"
+
+
+@mcp.tool()
+def list_email_accounts() -> str:
+    """
+    Return the email addresses that the MCP uses when searching: Outlook account(s) and Gmail account (if configured).
+    Use this to see which mailboxes are included when you run search_emails_to_excel. Outlook may prompt for sign-in if tokens expired.
+    """
+    parts: list[str] = []
+    try:
+        outlook_emails = get_outlook_account_emails()
+        if outlook_emails:
+            parts.append("Outlook: " + ", ".join(outlook_emails))
+        else:
+            parts.append("Outlook: (none or not configured)")
+    except Exception as e:
+        parts.append(f"Outlook: error — {e}")
+    try:
+        gmail_email = get_gmail_account_email()
+        if gmail_email:
+            parts.append("Gmail: " + gmail_email)
+        else:
+            parts.append("Gmail: (none or not configured)")
+    except Exception as e:
+        parts.append(f"Gmail: error — {e}")
+    return " ".join(parts)
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ MCP_PLAYGROUND/
 - **Modular package:** All email logic lives in **`mcp_email/`** (config, Gmail client, Outlook client, filters, Excel writer). The server only wires the tool to FastMCP.
 - **Config (`.env`):**
   - `OUTLOOK_CLIENT_ID` — Azure app (public client) client ID.
-  - `OUTLOOK_TOKEN_CACHE_2` — (Optional) Second Outlook account cache path for two inboxes.
+  - `OUTLOOK_TOKEN_CACHE_2`, `OUTLOOK_TOKEN_CACHE_3`, … `OUTLOOK_TOKEN_CACHE_20` — (Optional) Extra Outlook account cache paths so multiple Azure/Outlook users are searched; each user signs in once and gets a separate cache file.
   - Gmail uses `gmail_credentials.json` and `gmail_token.json` in the project root (paths can be overridden with env vars).
 - **Credentials:**
   - **Gmail:** Create a project in Google Cloud, enable Gmail API, create OAuth 2.0 credentials (Desktop), download as `gmail_credentials.json`. First run will open a browser to sign in and create `gmail_token.json`.
@@ -114,7 +114,7 @@ MCP_PLAYGROUND/
 
 ## Adding or changing the email MCP
 
-- **Change credential paths:** Set `GMAIL_CREDENTIALS_JSON`, `GMAIL_TOKEN_JSON`, `OUTLOOK_TOKEN_CACHE`, or `OUTLOOK_TOKEN_CACHE_2` in `.env`.
+- **Change credential paths:** Set `GMAIL_CREDENTIALS_JSON`, `GMAIL_TOKEN_JSON`, `OUTLOOK_TOKEN_CACHE`, or `OUTLOOK_TOKEN_CACHE_2`, `OUTLOOK_TOKEN_CACHE_3`, … in `.env`. Use multiple Outlook caches to search all Azure users (one token cache per user).
 - **Add another tool:** Add a new `@mcp.tool()` in `email_server.py` and call `mcp_email` helpers (`search_gmail_rows`, `search_outlook_rows`, `write_emails_excel`, etc.).
 - **Reuse email logic elsewhere:** `from mcp_email import search_gmail_rows, search_outlook_rows, write_emails_excel` (call `mcp_email.config.set_base_path(...)` first).
 

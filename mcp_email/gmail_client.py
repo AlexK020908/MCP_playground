@@ -34,6 +34,16 @@ def get_gmail_service():
     return build("gmail", "v1", credentials=creds)
 
 
+def get_gmail_account_email() -> str | None:
+    """Return the email address of the authenticated Gmail user, or None if not configured or error."""
+    try:
+        service = get_gmail_service()
+        profile = service.users().getProfile(userId="me").execute()
+        return (profile.get("emailAddress") or "").strip() or None
+    except Exception:
+        return None
+
+
 def search_gmail_rows(
     query: str,
     max_results: int,
